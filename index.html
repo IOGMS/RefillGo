@@ -98,7 +98,7 @@ const statusBadge = (s) => `<span class="badge ${statusClass(s)}">${escapeHTML(s
 const ACTIVE_STATUSES = ["Pending","Confirmed","Preparing","Out for Delivery"];
 const FLOW_STATUSES = ["Pending","Confirmed","Preparing","Out for Delivery","Delivered"];
 const STATUS_OPTIONS = ["Pending","Confirmed","Preparing","Out for Delivery","Delivered","Cancelled","Rejected"];
-let supabase = null, currentUser = null, profile = null, products = [], schedules = [], orders = [], notifications = [], statusHistory = [];
+let sbClient = null, currentUser = null, profile = null, products = [], schedules = [], orders = [], notifications = [], statusHistory = [];
 let currentPage = "home", realtimeChannels = [], liveReady = false, historySearch = "", historyStatus = "All", adminSearch = "", adminStatus = "All", orderFilter = "All", selectedTrackId = null;
 let productForOrder = null, orderQty = 1, refreshTimer = null;
 
@@ -289,12 +289,12 @@ async function bindPlaceOrder(){
  const form=$("placeOrderForm");if(!form)return;
  $("orderQty").addEventListener("change",()=>{let q=Number($("orderQty").value);if(!Number.isInteger(q)||q<1||q>30){$("orderQty").value=Math.min(30,Math.max(1,Math.floor(q)||1));}});
  form.onsubmit=async e=>{
-  e.preventDefault();if(!supabase)return toast("Connect Supabase before placing real orders.","error");
+  e.preventDefault();if(!sbClient)return toast("Connect Supabase before placing real orders.","error");
   const qty=Number($("orderQty").value),scheduleId=$("scheduleId").value,address=$("deliveryAddress").value.trim(),phone=$("orderPhone").value.trim(),instructions=$("specialInstructions").value.trim();
   if(!Number.isInteger(qty)||qty<1||qty>30)return toast("Quantity must be from 1 to 30.","error");
   if(!scheduleId||!address||!phone)return toast("Complete all required fields.","error");
   const button=form.querySelector('button[type="submit"]');button.disabled=true;button.textContent="Submitting…";
-  const {data,error}=await supabase.rpc("place_water_order",{p_product_id:productForOrder.id,p_quantity:qty,p_schedule_id:scheduleId,p_delivery_address:address,p_phone:phone,p_special_instructions:instructions});
+  const {data,error}=await sbClient.rpc("place_water_order",{p_product_id:productForOrder.id,p_quantity:qty,p_schedule_id:scheduleId,p_delivery_address:address,p_phone:phone,p_special_instructions:instructions});
   button.disabled=false;button.textContent="Submit water order";
   if(error){toast(error.message||"Could not submit order.","error");return;}
   toast("Order received! Your order number is "+(data?.order_number||"available in My Orders")+".");
@@ -304,47 +304,47 @@ async function bindPlaceOrder(){
 async function cancelOrder(orderId){
  const o=orders.find(x=>x.id===orderId);if(!o||o.status!=="Pending")return toast("Only pending orders can be cancelled by the customer.","error");
  if(!confirm("Cancel this order? This cannot be undone."))return;
- const {error}=await supabase.rpc("cancel_my_water_order",{p_order_id:orderId});
+ const {error}=await sbClient.rpc("cancel_my_water_order",{p_order_id:orderId});
  if(error)return toast(error.message,"error");
  toast("Order cancelled.");await refreshData();
 }
 async function openOrderDetails(orderId){
  const o=orders.find(x=>x.id===orderId);if(!o)return toast("Order not found.","error");
  if(!isAdmin()&&o.customer_id!==currentUser.id)return toast("You can only view your own orders.","error");
- const {data:hist}=await supabase.from("order_status_history").select("*").eq("order_id",orderId).order("created_at",{ascending:true});
+ const {data:hist}=await sbClient.from("order_status_history").select("*").eq("order_id",orderId).order("created_at",{ascending:true});
  const timeline=(hist||[]).map(h=>`<div style="padding:10px 0;border-bottom:1px solid var(--line)"><div style="display:flex;justify-content:space-between;gap:10px">${statusBadge(h.new_status)}<small class="muted">${dateTime(h.created_at)}</small></div><div class="tiny" style="margin-top:5px">${escapeHTML(h.remarks||"Status updated")}</div></div>`).join("");
  $("modalRoot").innerHTML=`<div id="detailBackdrop" style="position:fixed;inset:0;background:#102f4380;z-index:60;display:grid;place-items:center;padding:15px"><div class="panel" role="dialog" aria-modal="true" aria-labelledby="detailTitle" style="width:min(680px,100%);max-height:90vh;overflow:auto;margin:0"><div class="panel-head"><div><h3 id="detailTitle">Order ${escapeHTML(o.order_number||shortOrder(o.id))}</h3><div class="muted tiny">${dateTime(o.created_at)}</div></div><button class="btn-light" id="closeDetail">✕</button></div><div class="summary"><div class="summary-row"><span>Status</span>${statusBadge(o.status)}</div><div class="summary-row"><span>Product</span><strong>${escapeHTML(o.product?.product_name||"Water refill")}</strong></div><div class="summary-row"><span>Quantity</span><strong>${o.quantity}</strong></div><div class="summary-row"><span>Total</span><strong>${money(o.total_amount)}</strong></div><div class="summary-row"><span>Delivery date</span><strong>${dateOnly(o.scheduled_date)}</strong></div><div class="summary-row"><span>Time slot</span><strong>${escapeHTML(o.scheduled_time_slot||"—")}</strong></div><div class="summary-row"><span>Address</span><strong>${escapeHTML(o.delivery_address)}</strong></div><div class="summary-row"><span>Instructions</span><strong>${escapeHTML(o.special_instructions||"—")}</strong></div></div><h3>Status history</h3>${timeline||'<p class="muted tiny">No status history available.</p>'}</div></div>`;
  $("detailBackdrop").addEventListener("click",e=>{if(e.target.id==="detailBackdrop")$("modalRoot").innerHTML="";});$("closeDetail").onclick=()=>$("modalRoot").innerHTML="";
 }
 async function markNotificationRead(id){
- const {error}=await supabase.from("notifications").update({is_read:true}).eq("id",id).eq("recipient_id",currentUser.id);
+ const {error}=await sbClient.from("notifications").update({is_read:true}).eq("id",id).eq("recipient_id",currentUser.id);
  if(error)return toast(error.message,"error");await refreshNotificationsOnly();renderPage();renderNavigation();
 }
 async function markAllNotificationsRead(){
- const {error}=await supabase.from("notifications").update({is_read:true}).eq("recipient_id",currentUser.id).eq("is_read",false);
+ const {error}=await sbClient.from("notifications").update({is_read:true}).eq("recipient_id",currentUser.id).eq("is_read",false);
  if(error)return toast(error.message,"error");await refreshNotificationsOnly();renderPage();renderNavigation();toast("Notifications marked as read.");
 }
 async function saveProfile(e){
  e.preventDefault();const patch={full_name:$("profileName").value.trim(),phone:$("profilePhone").value.trim(),delivery_address:$("profileAddress").value.trim()};
- const {error}=await supabase.from("users").update(patch).eq("id",currentUser.id);
+ const {error}=await sbClient.from("users").update(patch).eq("id",currentUser.id);
  if(error)return toast(error.message,"error");profile={...profile,...patch};toast("Profile saved.");renderNavigation();renderPage();
 }
 async function adminUpdateStatus(orderId,newStatus){
  if(!confirm("Update order status to "+newStatus+"? The customer will receive an in-app notification."))return;
- const {error}=await supabase.rpc("admin_update_order_status",{p_order_id:orderId,p_new_status:newStatus,p_remarks:"Updated by administrator"});
+ const {error}=await sbClient.rpc("admin_update_order_status",{p_order_id:orderId,p_new_status:newStatus,p_remarks:"Updated by administrator"});
  if(error)return toast(error.message,"error");toast("Order status updated.");await refreshData();
 }
 async function createSchedule(e){
  e.preventDefault();const date=$("newSlotDate").value,time=$("newSlotTime").value.trim(),capacity=Number($("newSlotCapacity").value),status=$("newSlotStatus").value;
  if(!date||!time||!Number.isInteger(capacity)||capacity<1)return toast("Enter a valid date, time slot, and capacity.","error");
- const {error}=await supabase.from("delivery_schedules").insert({delivery_date:date,time_slot:time,max_capacity:capacity,available_capacity:capacity,status});
+ const {error}=await sbClient.from("delivery_schedules").insert({delivery_date:date,time_slot:time,max_capacity:capacity,available_capacity:capacity,status});
  if(error)return toast(error.message,"error");toast("Delivery slot created.");await refreshData();
 }
 async function toggleSchedule(id,status){
- const {error}=await supabase.from("delivery_schedules").update({status}).eq("id",id);if(error)return toast(error.message,"error");toast("Schedule updated.");await refreshData();
+ const {error}=await sbClient.from("delivery_schedules").update({status}).eq("id",id);if(error)return toast(error.message,"error");toast("Schedule updated.");await refreshData();
 }
 async function deleteSchedule(id){
- if(!confirm("Delete this delivery slot?"))return;const {error}=await supabase.from("delivery_schedules").delete().eq("id",id);if(error)return toast(error.message,"error");toast("Slot deleted.");await refreshData();
+ if(!confirm("Delete this delivery slot?"))return;const {error}=await sbClient.from("delivery_schedules").delete().eq("id",id);if(error)return toast(error.message,"error");toast("Slot deleted.");await refreshData();
 }
 function showProductForm(p=null){
  $("productFormWrap").classList.remove("hidden");$("productForm").dataset.editId=p?.id||"";
@@ -354,31 +354,31 @@ function showProductForm(p=null){
 async function saveProduct(e){
  e.preventDefault();const editId=e.target.dataset.editId;const item={product_name:$("productName").value.trim(),container_type:$("productContainer").value.trim(),price:Number($("productPrice").value),is_available:$("productAvailable").value==="true",description:$("productDescription").value.trim()};
  if(!item.product_name||!item.container_type||!Number.isFinite(item.price)||item.price<=0)return toast("Enter valid product details and price.","error");
- const result=editId?await supabase.from("products").update(item).eq("id",editId):await supabase.from("products").insert(item);
+ const result=editId?await sbClient.from("products").update(item).eq("id",editId):await sbClient.from("products").insert(item);
  if(result.error)return toast(result.error.message,"error");toast("Product saved.");await refreshData();
 }
 async function toggleProduct(id,available){
- const {error}=await supabase.from("products").update({is_available:available}).eq("id",id);if(error)return toast(error.message,"error");toast("Product availability updated.");await refreshData();
+ const {error}=await sbClient.from("products").update({is_available:available}).eq("id",id);if(error)return toast(error.message,"error");toast("Product availability updated.");await refreshData();
 }
 async function sendAnnouncement(e){
  e.preventDefault();const title=$("announcementTitle").value.trim(),message=$("announcementMessage").value.trim();if(!title||!message)return;
- const {data,error}=await supabase.rpc("send_water_announcement",{p_title:title,p_message:message});
+ const {data,error}=await sbClient.rpc("send_water_announcement",{p_title:title,p_message:message});
  if(error)return toast(error.message,"error");toast(`Announcement sent to ${data||"customers"}.`);e.target.reset();await refreshData();
 }
 
 async function loadProfile(){
- const {data,error}=await supabase.from("users").select("*").eq("id",currentUser.id).maybeSingle();
+ const {data,error}=await sbClient.from("users").select("*").eq("id",currentUser.id).maybeSingle();
  if(error)throw error;
- if(!data){const {data:created,error:createErr}=await supabase.from("users").insert({id:currentUser.id,email:currentUser.email,full_name:currentUser.user_metadata?.full_name||"",phone:currentUser.user_metadata?.phone||"",delivery_address:currentUser.user_metadata?.delivery_address||"",role:"student"}).select().single();if(createErr)throw createErr;profile=created;}else profile=data;
+ if(!data){const {data:created,error:createErr}=await sbClient.from("users").insert({id:currentUser.id,email:currentUser.email,full_name:currentUser.user_metadata?.full_name||"",phone:currentUser.user_metadata?.phone||"",delivery_address:currentUser.user_metadata?.delivery_address||"",role:"student"}).select().single();if(createErr)throw createErr;profile=created;}else profile=data;
 }
 async function refreshData(){
- if(!supabase||!currentUser)return;
+ if(!sbClient||!currentUser)return;
  try{
   const [p,s,o,n]=await Promise.all([
-   supabase.from("products").select("*").order("product_name"),
-   supabase.from("delivery_schedules").select("*").order("delivery_date").order("time_slot"),
-   isAdmin()?supabase.from("orders").select("*, product:products(product_name,container_type), customer:users!orders_customer_id_fkey(id,full_name,email,phone)").order("created_at",{ascending:false}):supabase.from("orders").select("*, product:products(product_name,container_type)").eq("customer_id",currentUser.id).order("created_at",{ascending:false}),
-   supabase.from("notifications").select("*, order:orders(order_number)").eq("recipient_id",currentUser.id).order("created_at",{ascending:false}).limit(100)
+   sbClient.from("products").select("*").order("product_name"),
+   sbClient.from("delivery_schedules").select("*").order("delivery_date").order("time_slot"),
+   isAdmin()?sbClient.from("orders").select("*, product:products(product_name,container_type), customer:users!orders_customer_id_fkey(id,full_name,email,phone)").order("created_at",{ascending:false}):sbClient.from("orders").select("*, product:products(product_name,container_type)").eq("customer_id",currentUser.id).order("created_at",{ascending:false}),
+   sbClient.from("notifications").select("*, order:orders(order_number)").eq("recipient_id",currentUser.id).order("created_at",{ascending:false}).limit(100)
   ]);
   for(const r of [p,s,o,n])if(r.error)throw r.error;
   products=p.data||[];schedules=s.data||[];orders=o.data||[];notifications=n.data||[];
@@ -386,15 +386,15 @@ async function refreshData(){
  }catch(err){console.error(err);toast("Could not load data: "+(err.message||"Unknown error"),"error");}
 }
 async function refreshNotificationsOnly(){
- const {data,error}=await supabase.from("notifications").select("*, order:orders(order_number)").eq("recipient_id",currentUser.id).order("created_at",{ascending:false}).limit(100);
+ const {data,error}=await sbClient.from("notifications").select("*, order:orders(order_number)").eq("recipient_id",currentUser.id).order("created_at",{ascending:false}).limit(100);
  if(error)throw error;notifications=data||[];
 }
-function cleanupRealtime(){realtimeChannels.forEach(c=>supabase?.removeChannel(c));realtimeChannels=[];liveReady=false;if(refreshTimer)clearInterval(refreshTimer);}
+function cleanupRealtime(){realtimeChannels.forEach(c=>sbClient?.removeChannel(c));realtimeChannels=[];liveReady=false;if(refreshTimer)clearInterval(refreshTimer);}
 function setupRealtime(){
  cleanupRealtime();
  const tables=["orders","notifications","products","delivery_schedules"];
  for(const table of tables){
-  const channel=supabase.channel("waterease-"+table+"-"+currentUser.id+"-"+Math.random().toString(36).slice(2));
+  const channel=sbClient.channel("waterease-"+table+"-"+currentUser.id+"-"+Math.random().toString(36).slice(2));
   channel.on("postgres_changes",{event:"*",schema:"public",table},payload=>{
    if(table==="notifications"&&payload.eventType==="INSERT"&&payload.new?.recipient_id===currentUser.id){
     toast(payload.new.title||"New order update");if("Notification"in window&&Notification.permission==="granted")new Notification(payload.new.title||"WaterEase update",{body:payload.new.message||"Your order has an update."});
@@ -412,39 +412,39 @@ async function enterApp(user){
  catch(err){console.error(err);showAuth();setAuthMessage("Could not load your profile. Check that supabase.sql was run and RLS policies are enabled. "+err.message,true);}
 }
 async function handleSignup(e){
- e.preventDefault();if(!supabase)return setAuthMessage("First configure Supabase URL and anon/publishable key in index.html.",true);
+ e.preventDefault();if(!sbClient)return setAuthMessage("First configure Supabase URL and anon/publishable key in index.html.",true);
  const full_name=$("signupName").value.trim(),email=$("signupEmail").value.trim(),phone=$("signupPhone").value.trim(),delivery_address=$("signupAddress").value.trim(),password=$("signupPassword").value;
  if(password.length<8)return setAuthMessage("Use a password with at least 8 characters.",true);
- const {data,error}=await supabase.auth.signUp({email,password,options:{data:{full_name,phone,delivery_address}}});
+ const {data,error}=await sbClient.auth.signUp({email,password,options:{data:{full_name,phone,delivery_address}}});
  if(error)return setAuthMessage(error.message,true);
  if(data.session){await enterApp(data.user);}else{setAuthMessage("Account created. Check your email to confirm your account, then log in.");$("signupForm").reset();}
 }
 async function handleLogin(e){
- e.preventDefault();if(!supabase)return setAuthMessage("First configure Supabase URL and anon/publishable key in index.html.",true);
+ e.preventDefault();if(!sbClient)return setAuthMessage("First configure Supabase URL and anon/publishable key in index.html.",true);
  const email=$("loginEmail").value.trim(),password=$("loginPassword").value;
- const {data,error}=await supabase.auth.signInWithPassword({email,password});
+ const {data,error}=await sbClient.auth.signInWithPassword({email,password});
  if(error)return setAuthMessage(error.message,true);setAuthMessage("");await enterApp(data.user);
 }
 async function logout(){
- cleanupRealtime();await supabase?.auth.signOut();currentUser=null;profile=null;orders=[];notifications=[];showAuth("login");toast("You have logged out.");
+ cleanupRealtime();await sbClient?.auth.signOut();currentUser=null;profile=null;orders=[];notifications=[];showAuth("login");toast("You have logged out.");
 }
 function init(){
  $("showSignup").onclick=()=>showAuth("signup");$("showLogin").onclick=()=>showAuth("login");
  $("loginForm").onsubmit=handleLogin;$("signupForm").onsubmit=handleSignup;
  $("logoutBtn").onclick=logout;$("topNotifications").onclick=()=>navigate("notifications");
  $("forgotPassword").onclick=async()=>{
-  if(!supabase)return setAuthMessage("Configure Supabase first.",true);const email=$("loginEmail").value.trim();if(!email)return setAuthMessage("Enter your email address above first.",true);
-  const {error}=await supabase.auth.resetPasswordForEmail(email,{redirectTo:location.href});setAuthMessage(error?error.message:"If the account exists, a password reset email will be sent.");
+  if(!sbClient)return setAuthMessage("Configure Supabase first.",true);const email=$("loginEmail").value.trim();if(!email)return setAuthMessage("Enter your email address above first.",true);
+  const {error}=await sbClient.auth.resetPasswordForEmail(email,{redirectTo:location.href});setAuthMessage(error?error.message:"If the account exists, a password reset email will be sent.");
  };
  if(!IS_CONFIGURED){setAuthMessage("Demo screen only until Supabase is configured. No fake orders or notifications are created.");return;}
- supabase=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
- supabase.auth.onAuthStateChange((event,session)=>{
+ sbClient=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
+ sbClient.auth.onAuthStateChange((event,session)=>{
   if(event==="SIGNED_OUT"){cleanupRealtime();currentUser=null;profile=null;showAuth();}
   else if(session?.user&&!currentUser){setTimeout(()=>enterApp(session.user),0);}
  });
- supabase.auth.getSession().then(({data,error})=>{if(error){setAuthMessage(error.message,true);return;}if(data.session)enterApp(data.session.user);});
+ sbClient.auth.getSession().then(({data,error})=>{if(error){setAuthMessage(error.message,true);return;}if(data.session)enterApp(data.session.user);});
 }
-document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible"&&supabase&&currentUser)refreshData();});
+document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible"&&sbClient&&currentUser)refreshData();});
 init();
 </script>
 </body>
